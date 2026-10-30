@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hand Grab 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d14; font-family: system-ui, sans-serif; color: #fff; }
+  #video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: .45; }
+  #scene, #overlay { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #overlay { pointer-events: none; }
+  #hud { position: fixed; top: 16px; left: 16px; right: 16px; display: flex; gap: 12px; align-items: flex-start; pointer-events: none; }
+  .card { background: rgba(10, 12, 20, .72); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 10px 14px; backdrop-filter: blur(6px); font-size: 14px; line-height: 1.5; }
+  #steps div::before { content: "○ "; opacity: .6; }
+  #steps div.done::before { content: "✓ "; color: #4ade80; opacity: 1; }
+  #steps div.fail::before { content: "✗ "; color: #f87171; opacity: 1; }
+  #state { margin-left: auto; text-align: right; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #666; margin-right: 6px; }
+  .dot.on { background: #4ade80; } .dot.pinch { background: #fbbf24; }
+  #msg { color: #fca5a5; margin-top: 6px; max-width: 480px; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted></video>
+<canvas id="scene"></canvas>
+<canvas id="overlay"></canvas>
+
+<a href="ar.html" style="position:fixed;bottom:16px;right:16px;z-index:5;color:#fff;background:#2563eb;padding:10px 16px;border-radius:10px;text-decoration:none;font-size:14px">Mode AR (mobile) →</a>
+<div id="hud">
+  <div class="card">
+    <div id="steps">
+      <div id="s-scene">Scène 3D</div>
+      <div id="s-cam">Accès webcam</div>
+      <div id="s-model">Modèle de détection des mains</div>
+    </div>
+    <div id="msg"></div>
+    <div style="margin-top:8px;opacity:.8">Pince (pouce + index) près du cube pour l'attraper et bouge la main pour le déplacer. Relâche pour le laisser tomber, ou lance-le d'un geste vif. La souris marche aussi.</div>
+  </div>
+  <div class="card" id="state"><span class="dot" id="dot"></span><span id="stateText">Aucune main</span></div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const $ = id => document.getElementById(id);
+const mark = (id, cls) => $(id).className = cls;
+const showMsg = t => $('msg').textContent = t;
+
+/* ---------- Scène 3D (affichée tout de suite) ---------- */
+const canvas = $('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+camera.position.z = 9;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const key = new THREE.DirectionalLight(0xffffff, 1.4);
+key.position.set(3, 4, 5);
+scene.add(key);
+
+/* ---------- Pièce 3D : sol, murs, plafond, ombre ---------- */
+const ZFRONT = 3, ZBACK = -10, RADIUS = 0.7;   // RADIUS = demi-arête du cube
+const room = { x: 5, y: 3 };               // demi-largeur / demi-hauteur, recalculées selon l'écran
+const roomGroup = new THREE.Group();
+scene.add(roomGroup);
+scene.fog = new THREE.Fog(0x0b0d14, 10, 24);
+
+function buildRoom() {
+  for (const c of roomGroup.children) { c.geometry.dispose(); c.material.dispose(); }
+  roomGroup.clear();
+  // les murs touchent les bords de l'écran au plan avant (ZFRONT) et convergent vers le fond
+  const hh = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * (camera.position.z - ZFRONT);
+  room.y = hh; room.x = hh * camera.aspect;
+  const W = room.x, H = room.y, D = ZFRONT - ZBACK, N = 8, M = 12;
+
+  const pts = [];
+  const seg = (a, b) => pts.push(...a, ...b);
+  for (let i = 0; i <= N; i++) {
+    const x = -W + 2 * W * i / N, y = -H + 2 * H * i / N;
+    seg([x, -H, ZBACK], [x, -H, ZFRONT]);  seg([x, H, ZBACK], [x, H, ZFRONT]);   // sol, plafond
+    seg([x, -H, ZBACK], [x, H, ZBACK]);                                           // mur du fond
+    seg([-W, y, ZBACK], [W, y, ZBACK]);
+    seg([-W, y, ZBACK], [-W, y, ZFRONT]);  seg([W, y, ZBACK], [W, y, ZFRONT]);   // murs latéraux
+  }
+  for (let k = 0; k <= M; k++) {
+    const z = ZBACK + D * k / M;
+    seg([-W, -H, z], [W, -H, z]);  seg([-W, H, z], [W, H, z]);
+    seg([-W, -H, z], [-W, H, z]);  seg([W, -H, z], [W, H, z]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  roomGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.45 })));
+
+  const face = (w, h, color, opacity, pos, rot) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }));
+    m.position.set(...pos); m.rotation.set(...rot); roomGroup.add(m);
+  };
+  const zc = (ZFRONT + ZBACK) / 2;
+  face(2 * W, 2 * H, 0x05070d, 0.55, [0, 0, ZBACK], [0, 0, 0]);                       // fond
+  face(2 * W, D, 0x38bdf8, 0.14, [0, -H, zc], [-Math.PI / 2, 0, 0]);                  // sol
+  face(2 * W, D, 0x05070d, 0.25, [0, H, zc], [Math.PI / 2, 0, 0]);                    // plafond
+  face(D, 2 * H, 0x05070d, 0.3, [-W, 0, zc], [0, Math.PI / 2, 0]);                    // mur gauche
+  face(D, 2 * H, 0x05070d, 0.3, [W, 0, zc], [0, Math.PI / 2, 0]);                     // mur droit
+}
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  buildRoom();
+  const ov = $('overlay'); ov.width = w; ov.height = h;
+}
+addEventListener('resize', resize);
+resize();
+mark('s-scene', 'done');
+
+/* ---------- Cubes ---------- */
+const CUBE_COLORS = [0x38bdf8, 0xf472b6, 0xa78bfa, 0xfb923c, 0x34d399];
+const COLOR_HOVER = 0xfbbf24, COLOR_GRAB = 0x4ade80;
+const cubeGeo = new THREE.BoxGeometry(2 * RADIUS, 2 * RADIUS, 2 * RADIUS);
+const edgeGeo = new THREE.EdgesGeometry(cubeGeo);
+const shadowGeo = new THREE.PlaneGeometry(2, 2);
+
+const cubes = CUBE_COLORS.map((color, i) => {
+  const mesh = new THREE.Mesh(cubeGeo, new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0.4, flatShading: true }));
+  mesh.add(new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color: 0xffffff })));
+  mesh.position.set((i - 2) * 1.9, -0.5 + i * 0.5, -1 - (i % 2) * 2.5);   // tombent de hauteurs différentes
+  scene.add(mesh);
+  const shadow = new THREE.Mesh(shadowGeo, new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5, depthWrite: false }));
+  shadow.rotation.x = -Math.PI / 2;
+  scene.add(shadow);
+  return { mesh, shadow, color, velocity: new THREE.Vector3(), spin: new THREE.Vector3(), supported: false };
+});
+
+/* ---------- Saisie ---------- */
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const target = new THREE.Vector3();
+let grabbed = false, hovering = null, held = null;   // hovering / held : cube concerné ou null
+let grabOffset = new THREE.Vector3(), grabZ0 = 0, grabSize0 = 1;
+
+// pointe l'écran (px) vers la position monde au plan z donné
+function screenToWorld(px, py, z) {
+  const v = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5).unproject(camera);
+  const dir = v.sub(camera.position).normalize();
+  return camera.position.clone().add(dir.multiplyScalar((z - camera.position.z) / dir.z));
+}
+
+// cube sous le curseur (rayon, puis tolérance de 90 px autour du centre)
+function pickCube(px, py) {
+  ndc.set((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hits = raycaster.intersectObjects(cubes.map(c => c.mesh), false);
+  if (hits.length) return cubes.find(c => c.mesh === hits[0].object);
+  let best = null, bestD = 90;
+  for (const c of cubes) {
+    const p = c.mesh.position.clone().project(camera);
+    const d = Math.hypot((p.x + 1) / 2 * innerWidth - px, (1 - p.y) / 2 * innerHeight - py);
+    if (d < bestD) { bestD = d; best = c; }
+  }
+  return best;
+}
+
+// réglages de sensibilité
+const Z_GAIN = 16;          // profondeur : unités monde par variation relative de la taille de la main
+const THROW_GAIN = 1.6;     // multiplicateur de la vitesse de lancer (x, y, z)
+const Z_THROW_BOOST = 1.8;  // bonus supplémentaire pour les lancers en profondeur
+
+const history = [];         // trajectoire récente de la main pour calculer le lancer
+
+function startGrab(cube, px, py, handSize) {
+  held = cube;
+  grabbed = true;
+  grabZ0 = cube.mesh.position.z;
+  grabSize0 = handSize || 1;
+  grabOffset.copy(cube.mesh.position).sub(screenToWorld(px, py, cube.mesh.position.z));
+  target.copy(cube.mesh.position);
+  history.length = 0;
+}
+function moveGrab(px, py, handSize) {
+  let z = grabZ0;
+  if (handSize) z = THREE.MathUtils.clamp(grabZ0 + (handSize / grabSize0 - 1) * Z_GAIN, ZBACK + RADIUS, ZFRONT - RADIUS);
+  target.copy(screenToWorld(px, py, z)).add(grabOffset);
+  target.z = z;
+  const now = performance.now();
+  history.push({ t: now, p: target.clone() });
+  while (history.length && now - history[0].t > 400) history.shift();
+}
+function endGrab() {
+  if (!held) return;
+  const { velocity, spin } = held;
+  // vitesse de la main juste avant le relâchement (on ignore les 40 dernières ms : le geste d'ouverture des doigts fausse la position)
+  const now = performance.now();
+  let end = null;
+  for (let i = history.length - 1; i >= 0; i--) if (history[i].t <= now - 40) { end = history[i]; break; }
+  const start = end && history.find(s => s.t >= end.t - 150);
+  velocity.set(0, 0, 0);
+  if (end && start && end.t - start.t > 30 && now - end.t < 250) {   // main immobile depuis > 250 ms : pas de lancer
+    velocity.copy(end.p).sub(start.p).divideScalar((end.t - start.t) / 1000).multiplyScalar(THROW_GAIN);
+    velocity.z *= Z_THROW_BOOST;
+    if (velocity.length() > MAX_SPEED) velocity.setLength(MAX_SPEED);
+  }
+  // le cube tourne autour de l'axe perpendiculaire à sa direction de lancer
+  spin.set(velocity.z, velocity.length() * 0.15, -velocity.x).multiplyScalar(0.8 / RADIUS);
+  history.length = 0;
+  held = null;
+  grabbed = false;
+}
+
+/* ---------- Souris (secours) ---------- */
+let mouseDown = false;
+addEventListener('pointerdown', e => {
+  const c = pickCube(e.clientX, e.clientY);
+  if (c) { mouseDown = true; startGrab(c, e.clientX, e.clientY); }
+});
+addEventListener('pointermove', e => { if (mouseDown) moveGrab(e.clientX, e.clientY); else if (!handActive) hovering = pickCube(e.clientX, e.clientY); });
+addEventListener('pointerup', () => { if (mouseDown) { mouseDown = false; endGrab(); } });
+
+/* ---------- Physique : gravité, cubes solides sans rebond, empilables ---------- */
+const GRAVITY = 18, AIR_DRAG = 0.15, FRICTION = 8, MAX_SPEED = 40;
+
+// garde le cube dans la pièce ; un impact arrête le mouvement (pas de rebond)
+function clampToRoom(c) {
+  const p = c.mesh.position, v = c.velocity;
+  const bx = room.x - RADIUS, by = room.y - RADIUS;
+  if (p.x > bx)  { p.x = bx;  v.x = Math.min(v.x, 0); }
+  if (p.x < -bx) { p.x = -bx; v.x = Math.max(v.x, 0); }
+  if (p.y > by)  { p.y = by;  v.y = Math.min(v.y, 0); }
+  if (p.y < -by) { p.y = -by; v.y = 0; c.supported = true; }
+  if (p.z > ZFRONT - RADIUS) { p.z = ZFRONT - RADIUS; v.z = Math.min(v.z, 0); }
+  if (p.z < ZBACK + RADIUS)  { p.z = ZBACK + RADIUS;  v.z = Math.max(v.z, 0); }
+}
+
+// collision cube/cube : on sépare selon l'axe de moindre pénétration, sans rebond
+function collide(a, b) {
+  const pa = a.mesh.position, pb = b.mesh.position, S = 2 * RADIUS;
+  const d = { x: pa.x - pb.x, y: pa.y - pb.y, z: pa.z - pb.z };
+  const o = { x: S - Math.abs(d.x), y: S - Math.abs(d.y), z: S - Math.abs(d.z) };
+  if (o.x <= 0 || o.y <= 0 || o.z <= 0) return;
+
+  // préférence pour la verticale : permet d'empiler même avec un léger décalage
+  let axis = 'y', best = o.y * 0.75;
+  if (o.x < best) { axis = 'x'; best = o.x; }
+  if (o.z < best) { axis = 'z'; best = o.z; }
+  const pen = o[axis], s = d[axis] >= 0 ? 1 : -1;     // s = +1 : a est du côté positif de b
+
+  // le cube tenu n'est jamais repoussé, sauf quand il est posé sur un autre cube
+  let wa = a === held ? 0 : 1, wb = b === held ? 0 : 1;
+  if (axis === 'y') {
+    if (a === held && s > 0) { wa = 1; wb = 0; }
+    if (b === held && s < 0) { wb = 1; wa = 0; }
+  }
+  if (wa + wb === 0) return;
+  const move = pen / (wa + wb);
+  pa[axis] += s * move * wa;
+  pb[axis] -= s * move * wb;
+
+  const upper = s > 0 ? a : b, lower = s > 0 ? b : a;
+  if (axis === 'y') {
+    upper.supported = true;
+    if (upper.velocity.y < lower.velocity.y) upper.velocity.y = lower.velocity.y;
+    if (lower.velocity.y > upper.velocity.y) lower.velocity.y = upper.velocity.y;
+  } else {
+    const va = a.velocity[axis], vb = b.velocity[axis];
+    if ((va - vb) * s < 0) {                            // ils se rapprochent : choc parfaitement mou
+      const m = a === held ? 0 : b === held ? 0 : (va + vb) / 2;
+      a.velocity[axis] = b.velocity[axis] = m;
+    }
+  }
+}
+
+function stepPhysics(dt) {
+  for (const c of cubes) {
+    c.supported = false;
+    const p = c.mesh.position;
+    if (c === held) { p.lerp(target, 0.35); c.velocity.set(0, 0, 0); continue; }
+    c.velocity.y -= GRAVITY * dt;
+    c.velocity.multiplyScalar(1 - AIR_DRAG * dt);
+    if (c.velocity.length() > MAX_SPEED) c.velocity.setLength(MAX_SPEED);
+    p.addScaledVector(c.velocity, dt);
+  }
+  for (let it = 0; it < 6; it++) {
+    for (const c of cubes) clampToRoom(c);
+    for (let i = 0; i < cubes.length; i++)
+      for (let j = i + 1; j < cubes.length; j++) collide(cubes[i], cubes[j]);
+  }
+  for (const c of cubes) clampToRoom(c);
+  const f = 1 - Math.exp(-FRICTION * dt);               // frottement quand le cube est posé
+  for (const c of cubes) if (c.supported && c !== held) { c.velocity.x -= c.velocity.x * f; c.velocity.z -= c.velocity.z * f; }
+}
+
+/* ---------- Boucle de rendu ---------- */
+let lastFrame = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min((now - lastFrame) / 1000, 1 / 30) || 1 / 60;
+  lastFrame = now;
+  stepPhysics(dt);
+
+  const q = Math.PI / 2, snap = 1 - Math.exp(-8 * dt);
+  for (const c of cubes) {
+    const m = c.mesh;
+    if (c === held) {
+      c.spin.set(0, 0, 0);
+      m.rotation.y += 0.03;
+      m.rotation.x += 0.012;
+    } else if (c.supported) {
+      // posé : le cube se remet à plat sur la face la plus proche
+      for (const a of ['x', 'y', 'z']) m.rotation[a] += (Math.round(m.rotation[a] / q) * q - m.rotation[a]) * snap;
+      c.spin.multiplyScalar(Math.exp(-6 * dt));
+    } else {
+      m.rotation.x += c.spin.x * dt;
+      m.rotation.y += c.spin.y * dt;
+      m.rotation.z += c.spin.z * dt;
+    }
+    // ombre au sol : plus petite et plus pâle quand le cube est haut
+    const h = Math.max(0, m.position.y + room.y - RADIUS), k = Math.min(h / 6, 0.8);
+    c.shadow.rotation.z = m.rotation.y;
+    c.shadow.position.set(m.position.x, -room.y + 0.02, m.position.z);
+    c.shadow.scale.setScalar(RADIUS * (1.1 - k * 0.6));
+    c.shadow.material.opacity = 0.55 * (1 - k);
+    m.material.color.setHex(c === held ? COLOR_GRAB : c === hovering ? COLOR_HOVER : c.color);
+    m.scale.setScalar(c === held ? 1.1 : 1);
+  }
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+
+/* ---------- Webcam + MediaPipe ---------- */
+const video = $('video');
+let mirrored = true;
+const ov = $('overlay'), octx = ov.getContext('2d');
+let handActive = false;
+
+const withTimeout = (p, ms, label) => Promise.race([
+  p, new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' : délai dépassé (' + ms / 1000 + ' s)')), ms))
+]);
+
+let landmarker = null;
+try {
+  // smartphone : caméra arrière (sans miroir) ; ordinateur : webcam (miroir)
+  const phone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
+  let stream;
+  if (phone) {
+    try { stream = await withTimeout(navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }), 20000, 'Caméra arrière'); }
+    catch { /* pas de caméra arrière : on retombe sur la caméra par défaut */ }
+  }
+  stream = stream || await withTimeout(navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false }), 20000, 'Webcam');
+  mirrored = !(phone && stream.getVideoTracks()[0].getSettings().facingMode === 'environment');
+  if (!mirrored) video.style.transform = 'none';
+  video.srcObject = stream;
+  await video.play();
+  mark('s-cam', 'done');
+} catch (e) {
+  mark('s-cam', 'fail');
+  showMsg('Webcam indisponible (' + e.message + '). Utilise la souris pour tester.');
+}
+
+if (video.srcObject) {
+  try {
+    const vision = await withTimeout(import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs'), 30000, 'Bibliothèque MediaPipe');
+    const fileset = await withTimeout(vision.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'), 30000, 'Runtime WASM');
+    const modelPath = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+    const make = delegate => vision.HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: modelPath, delegate }, runningMode: 'VIDEO', numHands: 1
+    });
+    try { landmarker = await withTimeout(make('GPU'), 40000, 'Modèle (GPU)'); }
+    catch { landmarker = await withTimeout(make('CPU'), 40000, 'Modèle (CPU)'); }
+    mark('s-model', 'done');
+  } catch (e) {
+    mark('s-model', 'fail');
+    showMsg('Détection des mains indisponible : ' + e.message + '. Vérifie ta connexion internet.');
+  }
+}
+
+/* mapping coordonnées vidéo normalisées -> pixels écran (object-fit: cover + miroir) */
+function toScreen(lm) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const s = Math.max(innerWidth / vw, innerHeight / vh);
+  const ox = (vw * s - innerWidth) / 2, oy = (vh * s - innerHeight) / 2;
+  return { x: (mirrored ? 1 - lm.x : lm.x) * vw * s - ox, y: lm.y * vh * s - oy };
+}
+const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const setState = (cls, text) => { $('dot').className = 'dot ' + cls; $('stateText').textContent = text; };
+let cx = 0, cy = 0, lastT = -1, smSize = 0;
+
+function detect() {
+  requestAnimationFrame(detect);
+  if (!landmarker || video.readyState < 2 || video.currentTime === lastT) return;
+  lastT = video.currentTime;
+  const res = landmarker.detectForVideo(video, performance.now());
+  octx.clearRect(0, 0, ov.width, ov.height);
+
+  if (!res.landmarks.length) {
+    handActive = false;
+    smSize = 0;
+    if (grabbed && !mouseDown) endGrab();
+    hovering = null;
+    setState('', 'Aucune main');
+    return;
+  }
+  handActive = true;
+  const lm = res.landmarks[0].map(toScreen);
+  const raw = res.landmarks[0];
+
+  octx.strokeStyle = 'rgba(255,255,255,.8)'; octx.lineWidth = 3;
+  for (const [a, b] of BONES) { octx.beginPath(); octx.moveTo(lm[a].x, lm[a].y); octx.lineTo(lm[b].x, lm[b].y); octx.stroke(); }
+  octx.fillStyle = '#38bdf8';
+  for (const p of lm) { octx.beginPath(); octx.arc(p.x, p.y, 4, 0, 7); octx.fill(); }
+
+  const rawSize = Math.hypot(raw[0].x - raw[9].x, raw[0].y - raw[9].y);
+  smSize = smSize ? smSize + (rawSize - smSize) * 0.5 : rawSize;   // lissage anti-bruit de la profondeur
+  const handSize = smSize;
+  const pinchDist = Math.hypot(raw[4].x - raw[8].x, raw[4].y - raw[8].y) / handSize;
+  const mx = (lm[4].x + lm[8].x) / 2, my = (lm[4].y + lm[8].y) / 2;
+  cx += (mx - cx) * 0.5; cy += (my - cy) * 0.5;      // lissage
+
+  const pinching = grabbed && !mouseDown ? pinchDist < 0.45 : pinchDist < 0.3;   // hystérésis
+  hovering = grabbed ? held : pickCube(cx, cy);
+
+  octx.beginPath(); octx.arc(cx, cy, pinching ? 12 : 18, 0, 7);
+  octx.strokeStyle = pinching ? '#fbbf24' : '#fff'; octx.lineWidth = 3; octx.stroke();
+
+  if (pinching && !grabbed && hovering) startGrab(hovering, cx, cy, handSize);
+  if (!pinching && grabbed && !mouseDown) endGrab();
+  if (grabbed && !mouseDown) moveGrab(cx, cy, handSize);
+
+  setState(grabbed ? 'pinch' : 'on', grabbed ? 'Objet attrapé' : pinching ? 'Pincement (hors objet)' : 'Main détectée');
+}
+detect();
+</script>
+</body>
+</html>
