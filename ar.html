@@ -13,13 +13,12 @@
   #top { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; justify-content: space-between; gap: 8px; pointer-events: none; }
   #bottom { position: fixed; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; }
   #hint { text-align: center; pointer-events: none; }
-  #controls { display: flex; align-items: center; gap: 10px; }
-  #controls input { flex: 1; }
   button { font: inherit; color: #fff; background: #2563eb; border: 0; border-radius: 10px; padding: 10px 16px; }
   button.secondary { background: rgba(255,255,255,.16); }
-  #start { position: fixed; inset: 0; background: rgba(5, 7, 13, .92); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; }
+  #start { position: fixed; inset: 0; background: rgba(5, 7, 13, .94); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; overflow: auto; }
   #start h1 { margin: 0; font-size: 24px; }
-  #start p { margin: 0; max-width: 360px; opacity: .85; line-height: 1.5; }
+  #start ol { margin: 0; padding-left: 20px; max-width: 360px; text-align: left; line-height: 1.55; opacity: .9; }
+  #start a { color: #7dd3fc; }
   #start button { font-size: 18px; padding: 14px 28px; }
   #err { color: #fca5a5; max-width: 360px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #666; margin-right: 6px; }
@@ -32,44 +31,47 @@
 <canvas id="overlay"></canvas>
 
 <div id="top">
-  <div class="card" id="model">Mains : en attente</div>
+  <div class="card"><span class="dot" id="markerDot"></span><span id="markerText">Marqueur : en attente</span><br><span id="model" style="opacity:.8">Mains : en attente</span></div>
   <div class="card"><span class="dot" id="dot"></span><span id="stateText">Aucune main</span></div>
 </div>
 
 <div id="bottom">
   <div class="card" id="hint"></div>
-  <div class="card" id="controls">
-    <label id="dropLabel" style="display:flex;flex:1;align-items:center;gap:10px">
-      <span id="dropText" style="white-space:nowrap">Surface à 1,0 m</span>
-      <input id="drop" type="range" min="0.3" max="1.8" step="0.05" value="1.0">
-    </label>
-    <button id="replace" class="secondary" style="display:none">Replacer</button>
-  </div>
+  <button id="replace" class="secondary" style="display:none">Remettre les cubes</button>
 </div>
 
 <div id="start">
   <h1>Cubes en réalité augmentée</h1>
-  <p>Vise une surface (table, sol), touche l'écran pour y poser les cubes, puis attrape-les avec ta main libre : pince pouce + index, déplace, relâche ou lance.</p>
+  <ol>
+    <li>Affiche le <a href="marker.html" target="_blank">marqueur</a> sur un autre écran, ou imprime-le (10 à 15 cm) et pose-le à plat sur une table.</li>
+    <li>Touche « Démarrer » et filme le marqueur avec la caméra arrière.</li>
+    <li>Les cubes apparaissent dessus. Attrape-les avec ta main libre : pince pouce + index, déplace, relâche ou lance.</li>
+  </ol>
   <button id="go">Démarrer l'AR</button>
   <div id="err"></div>
 </div>
 
+<script src="vendor/cv.js"></script>
+<script src="vendor/aruco.js"></script>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 <script type="module">
 import * as THREE from 'three';
+import { cameraPoseFromMarker } from './pose.js';
 
 const $ = id => document.getElementById(id);
 const DEG = Math.PI / 180;
 
-/* ---------- Réglages (1 unité = 1 mètre) ---------- */
-const RADIUS = 0.06;         // demi-arête des cubes
-const HALF = 0.4;            // demi-côté de la surface de jeu
-const CEILING = 1.5;         // hauteur max au-dessus de la surface
-const GRAVITY = 9.8, AIR_DRAG = 0.15, FRICTION = 8, MAX_SPEED = 8;
-const THROW_GAIN = 1.5, Z_THROW_BOOST = 1.3;
-const CAMERA_FOV = 60;       // champ de vision vertical approximatif de la caméra arrière en portrait
+/* ---------- Réglages ----------
+   Unité du monde = côté du marqueur. Origine = centre du marqueur, posé à plat sur la surface (y = 0). */
+const RADIUS = 0.17;         // demi-arête des cubes
+const HALF = 1.5;            // demi-côté de la surface de jeu autour du marqueur
+const CEILING = 4;           // hauteur max
+const GRAVITY = 8, AIR_DRAG = 0.15, FRICTION = 8, MAX_SPEED = 8;
+const THROW_GAIN = 1.5;
+const DIAG_FOV = 72;         // champ de vision diagonal approximatif de la caméra arrière d'un téléphone (degrés)
+const MARKER_ID = 0;
 const CUBE_COLORS = [0x38bdf8, 0xf472b6, 0xa78bfa, 0xfb923c, 0x34d399];
 const COLOR_HOVER = 0xfbbf24, COLOR_GRAB = 0x4ade80;
 
@@ -77,58 +79,56 @@ const COLOR_HOVER = 0xfbbf24, COLOR_GRAB = 0x4ade80;
 const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(CAMERA_FOV, 1, 0.05, 50);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.02, 100);
+camera.position.set(0, 2.5, 2.5);
+camera.lookAt(0, 0, 0);
 scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 const sun = new THREE.DirectionalLight(0xffffff, 1.3);
 sun.position.set(1, 3, 1.5);
 scene.add(sun);
 
+const video = $('video');
+let focal = 0;   // focale en pixels vidéo, connue une fois la vidéo lancée
+
+// la caméra Three.js doit voir exactement ce que montre la vidéo (object-fit: cover)
+function syncCamera() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  camera.aspect = innerWidth / innerHeight;
+  if (vw && vh) {
+    focal = 0.5 * Math.hypot(vw, vh) / Math.tan(DIAG_FOV * DEG / 2);
+    const visibleH = innerHeight / Math.max(innerWidth / vw, innerHeight / vh);   // hauteur visible, en pixels vidéo
+    camera.fov = 2 * Math.atan(visibleH / 2 / focal) / DEG;
+  }
+  camera.updateProjectionMatrix();
+}
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
   $('overlay').width = innerWidth; $('overlay').height = innerHeight;
+  syncCamera();
 }
 addEventListener('resize', resize);
+video.addEventListener('loadedmetadata', syncCamera);
 resize();
 
-/* ---------- Orientation du téléphone (3 degrés de liberté) ---------- */
-const targetQ = new THREE.Quaternion();
-const euler = new THREE.Euler(), q1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
-const q0 = new THREE.Quaternion(), zee = new THREE.Vector3(0, 0, 1);
-let haveOrientation = false;
-function onOrient(e) {
-  if (e.alpha == null) return;
-  const screenAngle = (screen.orientation ? screen.orientation.angle : window.orientation || 0) * DEG;
-  euler.set(e.beta * DEG, e.alpha * DEG, -e.gamma * DEG, 'YXZ');
-  targetQ.setFromEuler(euler).multiply(q1).multiply(q0.setFromAxisAngle(zee, -screenAngle));
-  if (!haveOrientation) camera.quaternion.copy(targetQ);
-  haveOrientation = true;
-}
-
-/* ---------- Surface : grille, réticule, cubes ---------- */
-const surface = { placed: false, center: new THREE.Vector3(0, -1, -1.5) };
-const surfaceGroup = new THREE.Group();
-scene.add(surfaceGroup);
+/* ---------- Surface et marqueur ---------- */
 {
-  const pts = [], N = 8;
+  const pts = [], N = 12;
   for (let i = 0; i <= N; i++) {
     const t = -HALF + 2 * HALF * i / N;
-    pts.push(t, 0, -HALF, t, 0, HALF, -HALF, 0, t, HALF, 0, t);
+    pts.push(t, 0.001, -HALF, t, 0.001, HALF, -HALF, 0.001, t, HALF, 0.001, t);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  surfaceGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45 })));
+  scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 })));
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(2 * HALF, 2 * HALF),
-    new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.12, depthWrite: false }));
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.1, depthWrite: false }));
   plane.rotation.x = -Math.PI / 2;
-  surfaceGroup.add(plane);
+  scene.add(plane);
+  const frame = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints([[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]].map(([x, z]) => new THREE.Vector3(x, 0.003, z))),
+    new THREE.LineBasicMaterial({ color: 0xfbbf24 }));
+  scene.add(frame);
 }
-const reticle = new THREE.Mesh(new THREE.RingGeometry(0.05, 0.065, 40),
-  new THREE.MeshBasicMaterial({ color: 0xfbbf24, side: THREE.DoubleSide }));
-reticle.rotation.x = -Math.PI / 2;
-reticle.position.y = 0.003;
-surfaceGroup.add(reticle);
 
 const cubeGeo = new THREE.BoxGeometry(2 * RADIUS, 2 * RADIUS, 2 * RADIUS);
 const edgeGeo = new THREE.EdgesGeometry(cubeGeo);
@@ -144,30 +144,52 @@ const cubes = CUBE_COLORS.map(color => {
   scene.add(shadow);
   return { mesh, shadow, color, velocity: new THREE.Vector3(), spin: new THREE.Vector3(), supported: false };
 });
+let spawned = false;
 
-const floorY = () => surface.center.y + RADIUS;   // hauteur du centre d'un cube posé
-
-function placeCubes() {
-  surface.placed = true;
-  const c = surface.center;
+function spawnCubes() {
+  endGrab();
+  spawned = true;
   cubes.forEach((cube, i) => {
-    const col = [-0.16, 0, 0.16, -0.08, 0.08][i];            // 3 cubes derrière, 2 devant
-    cube.mesh.position.set(c.x + col, c.y + RADIUS + 0.1 + i * 0.08, c.z + (i < 3 ? -0.1 : 0.08));
+    const col = [-0.9, 0, 0.9, -0.45, 0.45][i];                   // 3 cubes derrière, 2 devant
+    cube.mesh.position.set(col, RADIUS + 0.6 + i * 0.5, i < 3 ? -0.6 : 0.5);
     cube.mesh.rotation.set(0, 0, 0);
     cube.velocity.set(0, 0, 0); cube.spin.set(0, 0, 0);
     cube.mesh.visible = cube.shadow.visible = true;
   });
-  reticle.visible = false;
   $('replace').style.display = '';
-  $('dropLabel').style.display = 'none';
 }
-function unplace() {
-  endGrab();
-  surface.placed = false;
-  for (const c of cubes) c.mesh.visible = c.shadow.visible = false;
-  reticle.visible = true;
-  $('replace').style.display = 'none';
-  $('dropLabel').style.display = 'flex';
+$('replace').addEventListener('click', spawnCubes);
+
+/* ---------- Position de la caméra : marqueur d'abord, gyroscope en relais ---------- */
+const targetQ = new THREE.Quaternion();                 // orientation donnée par le gyroscope (caméra, repère gyroscope)
+const euler = new THREE.Euler(), q1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+const q0 = new THREE.Quaternion(), zee = new THREE.Vector3(0, 0, 1);
+let haveOrientation = false;
+function onOrient(e) {
+  if (e.alpha == null) return;
+  const screenAngle = (screen.orientation ? screen.orientation.angle : window.orientation || 0) * DEG;
+  euler.set(e.beta * DEG, e.alpha * DEG, -e.gamma * DEG, 'YXZ');
+  targetQ.setFromEuler(euler).multiply(q1).multiply(q0.setFromAxisAngle(zee, -screenAngle));
+  haveOrientation = true;
+}
+
+const camPos = camera.position.clone(), camQuat = camera.quaternion.clone();   // pose lissée issue du marqueur
+let markerSeen = false, lastSeen = 0;
+const gyroAtFix = new THREE.Quaternion();               // gyroscope au dernier calage sur le marqueur
+const camQAtFix = new THREE.Quaternion();
+const gyroInv = new THREE.Quaternion();
+
+function applyCameraPose(now) {
+  if (!markerSeen) return;
+  if (now - lastSeen < 400 || !haveOrientation) {
+    camera.position.copy(camPos);
+    camera.quaternion.copy(camQuat);
+  } else {
+    // marqueur perdu de vue : la position est gelée, la rotation suit le gyroscope
+    gyroInv.copy(gyroAtFix).invert();
+    camera.position.copy(camPos);
+    camera.quaternion.copy(targetQ).multiply(gyroInv).multiply(camQAtFix);
+  }
 }
 
 /* ---------- Saisie ---------- */
@@ -186,7 +208,7 @@ function screenRay(px, py) {
 
 // cube sous le curseur : rayon d'abord, puis tolérance de 70 px autour du centre
 function pickCube(px, py) {
-  if (!surface.placed) return null;
+  if (!spawned) return null;
   screenRay(px, py);
   const hits = raycaster.intersectObjects(cubes.map(c => c.mesh), false);
   if (hits.length) return cubes.find(c => c.mesh === hits[0].object);
@@ -212,7 +234,7 @@ function startGrab(cube, px, py, handSize) {
 function moveGrab(px, py, handSize) {
   const dir = screenRay(px, py);
   // une main 2x plus grosse = 2x plus proche de la caméra
-  const dist = handSize ? THREE.MathUtils.clamp(grabDist0 * grabSize0 / handSize, 0.25, 4) : grabDist0;
+  const dist = handSize ? THREE.MathUtils.clamp(grabDist0 * grabSize0 / handSize, 0.3, 12) : grabDist0;
   target.copy(camera.position).addScaledVector(dir, dist).add(grabOffset);
   const now = performance.now();
   history.push({ t: now, p: target.clone() });
@@ -236,30 +258,26 @@ function endGrab() {
   held = null;
 }
 
-/* ---------- Toucher l'écran : poser les cubes, ou attraper un cube au doigt ---------- */
+/* ---------- Toucher un cube au doigt (secours) ---------- */
 let touching = false, handActive = false, started = false;
 $('scene').addEventListener('pointerdown', e => {
-  if (!started) return;
-  if (!surface.placed) { if (reticle.visible && reticleOk) placeCubes(); return; }
-  if (handActive) return;
+  if (!started || handActive) return;
   const c = pickCube(e.clientX, e.clientY);
   if (c) { touching = true; startGrab(c, e.clientX, e.clientY); }
 });
 addEventListener('pointermove', e => { if (touching) moveGrab(e.clientX, e.clientY); });
 addEventListener('pointerup', () => { if (touching) { touching = false; endGrab(); } });
-$('replace').addEventListener('click', unplace);
-$('drop').addEventListener('input', e => { $('dropText').textContent = 'Surface à ' + Number(e.target.value).toFixed(1).replace('.', ',') + ' m'; });
 
 /* ---------- Physique : cubes solides, sans rebond, empilables ---------- */
 function clampToSurface(c) {
-  const p = c.mesh.position, v = c.velocity, o = surface.center;
-  const bx = HALF - RADIUS, floor = floorY(), ceil = o.y + CEILING;
-  if (p.x > o.x + bx) { p.x = o.x + bx; v.x = Math.min(v.x, 0); }
-  if (p.x < o.x - bx) { p.x = o.x - bx; v.x = Math.max(v.x, 0); }
-  if (p.z > o.z + bx) { p.z = o.z + bx; v.z = Math.min(v.z, 0); }
-  if (p.z < o.z - bx) { p.z = o.z - bx; v.z = Math.max(v.z, 0); }
-  if (p.y > ceil)  { p.y = ceil;  v.y = Math.min(v.y, 0); }
-  if (p.y < floor) { p.y = floor; v.y = 0; c.supported = true; }
+  const p = c.mesh.position, v = c.velocity;
+  const b = HALF - RADIUS;
+  if (p.x > b)  { p.x = b;  v.x = Math.min(v.x, 0); }
+  if (p.x < -b) { p.x = -b; v.x = Math.max(v.x, 0); }
+  if (p.z > b)  { p.z = b;  v.z = Math.min(v.z, 0); }
+  if (p.z < -b) { p.z = -b; v.z = Math.max(v.z, 0); }
+  if (p.y > CEILING) { p.y = CEILING; v.y = Math.min(v.y, 0); }
+  if (p.y < RADIUS)  { p.y = RADIUS;  v.y = 0; c.supported = true; }
 }
 
 function collide(a, b) {
@@ -318,34 +336,19 @@ function stepPhysics(dt) {
 }
 
 /* ---------- Boucle de rendu ---------- */
-const fwd = new THREE.Vector3(), hit = new THREE.Vector3();
-let reticleOk = false;
 let lastFrame = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min((now - lastFrame) / 1000, 1 / 30) || 1 / 60;
   lastFrame = now;
-  if (haveOrientation) camera.quaternion.slerp(targetQ, 0.6);
+  applyCameraPose(now);
 
-  if (!surface.placed) {
-    // le réticule suit le point où le regard rencontre la surface
-    const drop = Number($('drop').value);
-    camera.getWorldDirection(fwd);
-    reticleOk = fwd.y < -0.08 && drop / -fwd.y < 6;
-    if (reticleOk) {
-      hit.copy(fwd).multiplyScalar(drop / -fwd.y);
-      hit.y = -drop;
-      surface.center.copy(hit);
-    }
-    surfaceGroup.visible = reticleOk;
-    $('hint').textContent = reticleOk ? "Touche l'écran pour poser les cubes ici. Ajuste la hauteur de la surface avec le curseur." : 'Oriente le téléphone vers le bas, vers une table ou le sol.';
-  } else {
-    $('hint').textContent = held ? 'Cube attrapé : bouge la main, relâche ou lance !' : 'Pince pouce + index sur un cube pour l\'attraper (ou glisse-le au doigt).';
-  }
-  surfaceGroup.position.copy(surface.center);
-  surfaceGroup.visible = surface.placed || reticleOk;
+  if (!started) $('hint').textContent = '';
+  else if (!markerSeen) $('hint').textContent = 'Filme le marqueur avec la caméra arrière pour faire apparaître les cubes.';
+  else if (now - lastSeen > 400) $('hint').textContent = 'Marqueur hors champ : les cubes restent en place, ramène-le dans l\'image pour recaler.';
+  else $('hint').textContent = held ? 'Cube attrapé : bouge la main, relâche ou lance !' : 'Pince pouce + index sur un cube pour l\'attraper (ou glisse-le au doigt).';
 
-  if (surface.placed) {
+  if (spawned) {
     stepPhysics(dt);
     const q = Math.PI / 2, snap = 1 - Math.exp(-8 * dt);
     for (const c of cubes) {
@@ -357,9 +360,9 @@ function frame(now) {
       } else {
         m.rotation.x += c.spin.x * dt; m.rotation.y += c.spin.y * dt; m.rotation.z += c.spin.z * dt;
       }
-      const h = Math.max(0, m.position.y - floorY()), k = Math.min(h / 0.6, 0.8);
+      const h = Math.max(0, m.position.y - RADIUS), k = Math.min(h / 1.2, 0.8);
       c.shadow.rotation.z = m.rotation.y;
-      c.shadow.position.set(m.position.x, surface.center.y + 0.002, m.position.z);
+      c.shadow.position.set(m.position.x, 0.002, m.position.z);
       c.shadow.scale.setScalar(RADIUS * (1.1 - k * 0.6));
       c.shadow.material.opacity = 0.5 * (1 - k);
       m.material.color.setHex(c === held ? COLOR_GRAB : c === hovering ? COLOR_HOVER : c.color);
@@ -370,8 +373,7 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-/* ---------- Démarrage : orientation, caméra arrière, mains ---------- */
-const video = $('video');
+/* ---------- Démarrage : capteurs, caméra arrière ---------- */
 const octx = $('overlay').getContext('2d');
 let landmarker = null;
 
@@ -407,12 +409,50 @@ $('go').addEventListener('click', async () => {
     $('err').textContent = 'Caméra indisponible : ' + e.message + '. La page doit être ouverte en HTTPS.';
     return;
   }
+  syncCamera();
   $('start').style.display = 'none';
   started = true;
-  setTimeout(() => { if (!haveOrientation) $('hint').textContent = 'Aucun capteur d\'orientation détecté : la vue restera fixe.'; }, 2000);
+  trackMarker();
   loadHands();
 });
 
+/* ---------- Détection du marqueur ---------- */
+const detector = new AR.Detector({ dictionaryName: 'ARUCO', maxHammingDistance: 2 });
+const detCanvas = document.createElement('canvas');
+const detCtx = detCanvas.getContext('2d', { willReadFrequently: true });
+const DET_WIDTH = 480;
+let lastDetect = 0;
+
+function setMarkerState(on, text) { $('markerDot').className = 'dot' + (on ? ' on' : ''); $('markerText').textContent = text; }
+
+function trackMarker() {
+  requestAnimationFrame(trackMarker);
+  const now = performance.now();
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (video.readyState < 2 || !vw || now - lastDetect < 50) return;   // 20 détections par seconde au maximum
+  lastDetect = now;
+
+  detCanvas.width = DET_WIDTH; detCanvas.height = Math.round(DET_WIDTH * vh / vw);
+  detCtx.drawImage(video, 0, 0, detCanvas.width, detCanvas.height);
+  const marker = detector.detect(detCtx.getImageData(0, 0, detCanvas.width, detCanvas.height)).find(m => m.id === MARKER_ID);
+
+  if (!marker) { setMarkerState(false, markerSeen ? 'Marqueur : hors champ' : 'Marqueur : recherche…'); return; }
+
+  const k = vw / detCanvas.width;
+  const pose = cameraPoseFromMarker(marker.corners.map(c => ({ x: c.x * k, y: c.y * k })), focal, vw / 2, vh / 2);
+  if (!pose) return;
+
+  if (!markerSeen) { camPos.copy(pose.position); camQuat.copy(pose.quaternion); }
+  else { camPos.lerp(pose.position, 0.5); camQuat.slerp(pose.quaternion, 0.5); }   // lissage anti-tremblement
+  markerSeen = true;
+  lastSeen = now;
+  gyroAtFix.copy(targetQ);
+  camQAtFix.copy(camQuat);
+  setMarkerState(true, 'Marqueur : détecté ✓');
+  if (!spawned) spawnCubes();
+}
+
+/* ---------- Détection de la main ---------- */
 async function loadHands() {
   $('model').textContent = 'Mains : chargement…';
   try {
@@ -475,7 +515,7 @@ function detect() {
   octx.beginPath(); octx.arc(cx, cy, pinching ? 12 : 18, 0, 7);
   octx.strokeStyle = pinching ? '#fbbf24' : '#fff'; octx.lineWidth = 3; octx.stroke();
 
-  if (surface.placed) {
+  if (spawned) {
     if (pinching && !held && hovering) startGrab(hovering, cx, cy, smSize);
     if (!pinching && held && !touching) endGrab();
     if (held && !touching) moveGrab(cx, cy, smSize);

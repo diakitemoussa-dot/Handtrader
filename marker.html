@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marqueur AR</title>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #fff; color: #111; display: flex; flex-direction: column; align-items: center; padding: 16px; gap: 14px; }
+  #marker { width: min(90vw, 80vh); aspect-ratio: 1; }
+  #marker svg { width: 100%; height: 100%; display: block; }
+  .help { max-width: 460px; line-height: 1.5; font-size: 15px; }
+  button { font: inherit; padding: 10px 18px; border: 0; border-radius: 10px; background: #2563eb; color: #fff; }
+  @media print {
+    .help, button { display: none; }
+    body { padding: 0; }
+    #marker { width: 14cm; }
+  }
+</style>
+</head>
+<body>
+<div id="marker"></div>
+<div class="help">
+  <b>Marqueur pour la version AR.</b><br>
+  • <b>Sur écran</b> : affiche cette page sur un autre appareil (ordinateur, tablette) et pose-le à plat, luminosité au maximum.<br>
+  • <b>Imprimé</b> : imprime à 10–15 cm de côté, sans redimensionner, et pose la feuille à plat sur une table. Garde la marge blanche autour du carré noir.<br>
+  Les cubes apparaissent sur le marqueur et restent collés à la table quand tu bouges le téléphone.
+</div>
+<button onclick="window.print()">Imprimer</button>
+<script src="vendor/cv.js"></script>
+<script src="vendor/aruco.js"></script>
+<script>
+  document.getElementById('marker').innerHTML = new AR.Dictionary('ARUCO').generateSVG(0);
+</script>
+</body>
+</html>
