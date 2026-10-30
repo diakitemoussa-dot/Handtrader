@@ -5,130 +5,121 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Hand Grab AR</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: system-ui, sans-serif; color: #fff; touch-action: none; -webkit-user-select: none; user-select: none; }
-  #video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-  #scene, #overlay { position: fixed; inset: 0; width: 100%; height: 100%; }
-  #overlay { pointer-events: none; }
-  .card { background: rgba(10, 12, 20, .72); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 10px 14px; backdrop-filter: blur(6px); font-size: 14px; line-height: 1.45; }
-  #top { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; justify-content: space-between; gap: 8px; pointer-events: none; }
-  #bottom { position: fixed; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; }
-  #hint { text-align: center; pointer-events: none; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #05070d; font-family: system-ui, sans-serif; color: #fff; }
+  canvas#gl { position: fixed; inset: 0; width: 100%; height: 100%; }
+  .card { background: rgba(10, 12, 20, .72); border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 10px 14px; font-size: 14px; line-height: 1.45; }
   button { font: inherit; color: #fff; background: #2563eb; border: 0; border-radius: 10px; padding: 10px 16px; }
-  button.secondary { background: rgba(255,255,255,.16); }
-  #start { position: fixed; inset: 0; background: rgba(5, 7, 13, .94); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; overflow: auto; }
+  button.secondary { background: rgba(255,255,255,.18); }
+  #start { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; }
   #start h1 { margin: 0; font-size: 24px; }
-  #start ol { margin: 0; padding-left: 20px; max-width: 360px; text-align: left; line-height: 1.55; opacity: .9; }
+  #start p { margin: 0; max-width: 380px; line-height: 1.5; opacity: .9; }
   #start a { color: #7dd3fc; }
   #start button { font-size: 18px; padding: 14px 28px; }
-  #err { color: #fca5a5; max-width: 360px; }
+  #note { color: #fca5a5; max-width: 380px; line-height: 1.5; }
+  /* contenu affiché par-dessus la caméra pendant la session AR (dom-overlay) */
+  #xrRoot { display: none; position: fixed; inset: 0; pointer-events: none; }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #top { position: absolute; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; display: flex; justify-content: space-between; gap: 8px; }
+  #bottom { position: absolute; bottom: max(12px, env(safe-area-inset-bottom)); left: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #buttons { display: flex; gap: 8px; }
+  #buttons button { pointer-events: auto; flex: 1; }
+  #hint { text-align: center; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #666; margin-right: 6px; }
   .dot.on { background: #4ade80; } .dot.pinch { background: #fbbf24; }
 </style>
 </head>
 <body>
-<video id="video" playsinline muted autoplay></video>
-<canvas id="scene"></canvas>
-<canvas id="overlay"></canvas>
-
-<div id="top">
-  <div class="card"><span class="dot" id="markerDot"></span><span id="markerText">Marqueur : en attente</span><br><span id="model" style="opacity:.8">Mains : en attente</span></div>
-  <div class="card"><span class="dot" id="dot"></span><span id="stateText">Aucune main</span></div>
-</div>
-
-<div id="bottom">
-  <div class="card" id="hint"></div>
-  <button id="replace" class="secondary" style="display:none">Remettre les cubes</button>
-</div>
+<canvas id="gl"></canvas>
 
 <div id="start">
   <h1>Cubes en réalité augmentée</h1>
-  <ol>
-    <li>Affiche le <a href="marker.html" target="_blank">marqueur</a> sur un autre écran, ou imprime-le (10 à 15 cm) et pose-le à plat sur une table.</li>
-    <li>Touche « Démarrer » et filme le marqueur avec la caméra arrière.</li>
-    <li>Les cubes apparaissent dessus. Attrape-les avec ta main libre : pince pouce + index, déplace, relâche ou lance.</li>
-  </ol>
-  <button id="go">Démarrer l'AR</button>
-  <div id="err"></div>
+  <p>Le téléphone détecte la table ou le sol tout seul, sans marqueur. Touche l'écran pour poser les cubes, puis attrape-les avec ta main libre : pince pouce + index, déplace, relâche ou lance.</p>
+  <button id="go" disabled>Vérification…</button>
+  <div id="note"></div>
 </div>
 
-<script src="vendor/cv.js"></script>
-<script src="vendor/aruco.js"></script>
+<div id="xrRoot">
+  <canvas id="overlay"></canvas>
+  <div id="top">
+    <div class="card"><span id="model">Mains : en attente</span></div>
+    <div class="card"><span class="dot" id="dot"></span><span id="stateText">Aucune main</span></div>
+  </div>
+  <div id="bottom">
+    <div class="card" id="hint"></div>
+    <div id="buttons">
+      <button id="replace" class="secondary" style="display:none">Replacer</button>
+      <button id="orient" class="secondary">Image main</button>
+      <button id="quit" class="secondary">Quitter</button>
+    </div>
+  </div>
+</div>
+
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 <script type="module">
 import * as THREE from 'three';
-import { cameraPoseFromMarker } from './pose.js';
 
 const $ = id => document.getElementById(id);
-const DEG = Math.PI / 180;
 
-/* ---------- Réglages ----------
-   Unité du monde = côté du marqueur. Origine = centre du marqueur, posé à plat sur la surface (y = 0). */
-const RADIUS = 0.17;         // demi-arête des cubes
-const HALF = 1.5;            // demi-côté de la surface de jeu autour du marqueur
-const CEILING = 4;           // hauteur max
-const GRAVITY = 8, AIR_DRAG = 0.15, FRICTION = 8, MAX_SPEED = 8;
+/* ---------- Réglages (1 unité = 1 mètre) ---------- */
+const RADIUS = 0.06;          // demi-arête des cubes (cubes de 12 cm)
+const HALF = 0.4;             // demi-côté de la surface de jeu
+const CEILING = 1.5;          // hauteur max au-dessus de la surface
+const GRAVITY = 9.8, AIR_DRAG = 0.15, FRICTION = 8, MAX_SPEED = 8;
 const THROW_GAIN = 1.5;
-const DIAG_FOV = 72;         // champ de vision diagonal approximatif de la caméra arrière d'un téléphone (degrés)
-const MARKER_ID = 0;
+const HAND_INTERVAL = 90;     // ms entre deux détections de la main
+const HAND_WIDTH = 256;       // largeur de l'image envoyée à MediaPipe
 const CUBE_COLORS = [0x38bdf8, 0xf472b6, 0xa78bfa, 0xfb923c, 0x34d399];
 const COLOR_HOVER = 0xfbbf24, COLOR_GRAB = 0x4ade80;
 
+/* ---------- Compatibilité ---------- */
+let supported = false;
+try { supported = !!(navigator.xr && await navigator.xr.isSessionSupported('immersive-ar')); } catch {}
+if (supported) {
+  $('go').disabled = false; $('go').textContent = "Démarrer l'AR";
+} else {
+  $('go').style.display = 'none';
+  $('note').innerHTML = "Ce navigateur ne propose pas la vraie AR (WebXR). Elle fonctionne sur <b>Android avec Chrome</b> (téléphone compatible ARCore). " +
+    "Sur iPhone, Safari n'offre pas cette technologie : utilise le <a href=\"ar-marker.html\">mode marqueur</a>, qui demande d'afficher ou d'imprimer un repère.";
+}
+
 /* ---------- Scène ---------- */
-const renderer = new THREE.WebGLRenderer({ canvas: $('scene'), antialias: true, alpha: true });
+const renderer = new THREE.WebGLRenderer({ canvas: $('gl'), antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local');
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, 1, 0.02, 100);
-camera.position.set(0, 2.5, 2.5);
-camera.lookAt(0, 0, 0);
+const camera = new THREE.PerspectiveCamera();
 scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 const sun = new THREE.DirectionalLight(0xffffff, 1.3);
 sun.position.set(1, 3, 1.5);
 scene.add(sun);
 
-const video = $('video');
-let focal = 0;   // focale en pixels vidéo, connue une fois la vidéo lancée
-
-// la caméra Three.js doit voir exactement ce que montre la vidéo (object-fit: cover)
-function syncCamera() {
-  const vw = video.videoWidth, vh = video.videoHeight;
-  camera.aspect = innerWidth / innerHeight;
-  if (vw && vh) {
-    focal = 0.5 * Math.hypot(vw, vh) / Math.tan(DIAG_FOV * DEG / 2);
-    const visibleH = innerHeight / Math.max(innerWidth / vw, innerHeight / vh);   // hauteur visible, en pixels vidéo
-    camera.fov = 2 * Math.atan(visibleH / 2 / focal) / DEG;
-  }
-  camera.updateProjectionMatrix();
-}
-function resize() {
-  renderer.setSize(innerWidth, innerHeight, false);
-  $('overlay').width = innerWidth; $('overlay').height = innerHeight;
-  syncCamera();
-}
-addEventListener('resize', resize);
-video.addEventListener('loadedmetadata', syncCamera);
-resize();
-
-/* ---------- Surface et marqueur ---------- */
+// surface de jeu : grille + plan translucide, qui suit le réticule jusqu'à la pose
+const surface = { placed: false, center: new THREE.Vector3() };
+const surfaceGroup = new THREE.Group();
+surfaceGroup.visible = false;
+scene.add(surfaceGroup);
 {
-  const pts = [], N = 12;
+  const pts = [], N = 8;
   for (let i = 0; i <= N; i++) {
     const t = -HALF + 2 * HALF * i / N;
     pts.push(t, 0.001, -HALF, t, 0.001, HALF, -HALF, 0.001, t, HALF, 0.001, t);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-  scene.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 })));
+  surfaceGroup.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 })));
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(2 * HALF, 2 * HALF),
-    new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.1, depthWrite: false }));
+    new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.12, depthWrite: false }));
   plane.rotation.x = -Math.PI / 2;
-  scene.add(plane);
-  const frame = new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints([[-.5, -.5], [.5, -.5], [.5, .5], [-.5, .5]].map(([x, z]) => new THREE.Vector3(x, 0.003, z))),
-    new THREE.LineBasicMaterial({ color: 0xfbbf24 }));
-  scene.add(frame);
+  surfaceGroup.add(plane);
 }
+const reticle = new THREE.Mesh(new THREE.RingGeometry(0.05, 0.065, 40).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xfbbf24 }));
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+scene.add(reticle);
 
 const cubeGeo = new THREE.BoxGeometry(2 * RADIUS, 2 * RADIUS, 2 * RADIUS);
 const edgeGeo = new THREE.EdgesGeometry(cubeGeo);
@@ -144,98 +135,79 @@ const cubes = CUBE_COLORS.map(color => {
   scene.add(shadow);
   return { mesh, shadow, color, velocity: new THREE.Vector3(), spin: new THREE.Vector3(), supported: false };
 });
-let spawned = false;
 
-function spawnCubes() {
-  endGrab();
-  spawned = true;
+function placeCubes() {
+  surface.placed = true;
+  const c = surface.center;
+  surfaceGroup.position.copy(c);
+  surfaceGroup.visible = true;
+  reticle.visible = false;
   cubes.forEach((cube, i) => {
-    const col = [-0.9, 0, 0.9, -0.45, 0.45][i];                   // 3 cubes derrière, 2 devant
-    cube.mesh.position.set(col, RADIUS + 0.6 + i * 0.5, i < 3 ? -0.6 : 0.5);
+    const col = [-0.16, 0, 0.16, -0.08, 0.08][i];                       // 3 cubes derrière, 2 devant
+    cube.mesh.position.set(c.x + col, c.y + RADIUS + 0.1 + i * 0.08, c.z + (i < 3 ? -0.1 : 0.08));
     cube.mesh.rotation.set(0, 0, 0);
     cube.velocity.set(0, 0, 0); cube.spin.set(0, 0, 0);
     cube.mesh.visible = cube.shadow.visible = true;
   });
   $('replace').style.display = '';
 }
-$('replace').addEventListener('click', spawnCubes);
-
-/* ---------- Position de la caméra : marqueur d'abord, gyroscope en relais ---------- */
-const targetQ = new THREE.Quaternion();                 // orientation donnée par le gyroscope (caméra, repère gyroscope)
-const euler = new THREE.Euler(), q1 = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
-const q0 = new THREE.Quaternion(), zee = new THREE.Vector3(0, 0, 1);
-let haveOrientation = false;
-function onOrient(e) {
-  if (e.alpha == null) return;
-  const screenAngle = (screen.orientation ? screen.orientation.angle : window.orientation || 0) * DEG;
-  euler.set(e.beta * DEG, e.alpha * DEG, -e.gamma * DEG, 'YXZ');
-  targetQ.setFromEuler(euler).multiply(q1).multiply(q0.setFromAxisAngle(zee, -screenAngle));
-  haveOrientation = true;
+function unplace() {
+  endGrab();
+  surface.placed = false;
+  for (const c of cubes) c.mesh.visible = c.shadow.visible = false;
+  surfaceGroup.visible = false;
+  $('replace').style.display = 'none';
 }
 
-const camPos = camera.position.clone(), camQuat = camera.quaternion.clone();   // pose lissée issue du marqueur
-let markerSeen = false, lastSeen = 0;
-const gyroAtFix = new THREE.Quaternion();               // gyroscope au dernier calage sur le marqueur
-const camQAtFix = new THREE.Quaternion();
-const gyroInv = new THREE.Quaternion();
-
-function applyCameraPose(now) {
-  if (!markerSeen) return;
-  if (now - lastSeen < 400 || !haveOrientation) {
-    camera.position.copy(camPos);
-    camera.quaternion.copy(camQuat);
-  } else {
-    // marqueur perdu de vue : la position est gelée, la rotation suit le gyroscope
-    gyroInv.copy(gyroAtFix).invert();
-    camera.position.copy(camPos);
-    camera.quaternion.copy(targetQ).multiply(gyroInv).multiply(camQAtFix);
-  }
-}
-
-/* ---------- Saisie ---------- */
+/* ---------- Saisie (main ou doigt) ---------- */
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
+const handCam = new THREE.PerspectiveCamera();      // caméra de la vue AR, pour viser avec la main
+handCam.matrixAutoUpdate = false;
 const target = new THREE.Vector3();
-let held = null, hovering = null;
-let grabDist0 = 1, grabSize0 = 1, grabOffset = new THREE.Vector3();
+let held = null, hovering = null, touchSource = null;
+let grabDist0 = 1, grabSize0 = 1;
+const grabOffset = new THREE.Vector3();
 const history = [];
 
-function screenRay(px, py) {
-  ndc.set((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
-  return raycaster.ray.direction.clone();
+function updateHandCam(view) {
+  handCam.matrixWorld.fromArray(view.transform.matrix);
+  handCam.matrixWorldInverse.copy(handCam.matrixWorld).invert();
+  handCam.projectionMatrix.fromArray(view.projectionMatrix);
+  handCam.projectionMatrixInverse.copy(handCam.projectionMatrix).invert();
+  handCam.position.setFromMatrixPosition(handCam.matrixWorld);
 }
 
-// cube sous le curseur : rayon d'abord, puis tolérance de 70 px autour du centre
-function pickCube(px, py) {
-  if (!spawned) return null;
-  screenRay(px, py);
+// cube visé par un point de l'écran en coordonnées normalisées (-1..1), avec une tolérance autour du centre
+function pickCube(nx, ny) {
+  if (!surface.placed) return null;
+  ndc.set(nx, ny);
+  raycaster.setFromCamera(ndc, handCam);
   const hits = raycaster.intersectObjects(cubes.map(c => c.mesh), false);
   if (hits.length) return cubes.find(c => c.mesh === hits[0].object);
-  let best = null, bestD = 70;
+  const aspect = innerWidth / innerHeight;
+  let best = null, bestD = 0.2;
   for (const c of cubes) {
-    const p = c.mesh.position.clone().project(camera);
+    const p = c.mesh.position.clone().project(handCam);
     if (p.z > 1) continue;
-    const d = Math.hypot((p.x + 1) / 2 * innerWidth - px, (1 - p.y) / 2 * innerHeight - py);
+    const d = Math.hypot((p.x - nx) * aspect, p.y - ny);
     if (d < bestD) { bestD = d; best = c; }
   }
   return best;
 }
 
-function startGrab(cube, px, py, handSize) {
+function startGrab(cube, origin, dir, handSize) {
   held = cube;
-  const dir = screenRay(px, py);
-  grabDist0 = cube.mesh.position.distanceTo(camera.position);
+  grabDist0 = cube.mesh.position.distanceTo(origin);
   grabSize0 = handSize || 1;
-  grabOffset.copy(cube.mesh.position).sub(camera.position.clone().addScaledVector(dir, grabDist0));
+  grabOffset.copy(cube.mesh.position).sub(origin.clone().addScaledVector(dir, grabDist0));
   target.copy(cube.mesh.position);
   history.length = 0;
 }
-function moveGrab(px, py, handSize) {
-  const dir = screenRay(px, py);
+function moveGrab(origin, dir, handSize) {
   // une main 2x plus grosse = 2x plus proche de la caméra
-  const dist = handSize ? THREE.MathUtils.clamp(grabDist0 * grabSize0 / handSize, 0.3, 12) : grabDist0;
-  target.copy(camera.position).addScaledVector(dir, dist).add(grabOffset);
+  const dist = handSize ? THREE.MathUtils.clamp(grabDist0 * grabSize0 / handSize, 0.15, 3) : grabDist0;
+  target.copy(origin).addScaledVector(dir, dist).add(grabOffset);
   const now = performance.now();
   history.push({ t: now, p: target.clone() });
   while (history.length && now - history[0].t > 400) history.shift();
@@ -258,26 +230,16 @@ function endGrab() {
   held = null;
 }
 
-/* ---------- Toucher un cube au doigt (secours) ---------- */
-let touching = false, handActive = false, started = false;
-$('scene').addEventListener('pointerdown', e => {
-  if (!started || handActive) return;
-  const c = pickCube(e.clientX, e.clientY);
-  if (c) { touching = true; startGrab(c, e.clientX, e.clientY); }
-});
-addEventListener('pointermove', e => { if (touching) moveGrab(e.clientX, e.clientY); });
-addEventListener('pointerup', () => { if (touching) { touching = false; endGrab(); } });
-
 /* ---------- Physique : cubes solides, sans rebond, empilables ---------- */
 function clampToSurface(c) {
-  const p = c.mesh.position, v = c.velocity;
-  const b = HALF - RADIUS;
-  if (p.x > b)  { p.x = b;  v.x = Math.min(v.x, 0); }
-  if (p.x < -b) { p.x = -b; v.x = Math.max(v.x, 0); }
-  if (p.z > b)  { p.z = b;  v.z = Math.min(v.z, 0); }
-  if (p.z < -b) { p.z = -b; v.z = Math.max(v.z, 0); }
-  if (p.y > CEILING) { p.y = CEILING; v.y = Math.min(v.y, 0); }
-  if (p.y < RADIUS)  { p.y = RADIUS;  v.y = 0; c.supported = true; }
+  const p = c.mesh.position, v = c.velocity, o = surface.center;
+  const b = HALF - RADIUS, floor = o.y + RADIUS;
+  if (p.x > o.x + b) { p.x = o.x + b; v.x = Math.min(v.x, 0); }
+  if (p.x < o.x - b) { p.x = o.x - b; v.x = Math.max(v.x, 0); }
+  if (p.z > o.z + b) { p.z = o.z + b; v.z = Math.min(v.z, 0); }
+  if (p.z < o.z - b) { p.z = o.z - b; v.z = Math.max(v.z, 0); }
+  if (p.y > o.y + CEILING) { p.y = o.y + CEILING; v.y = Math.min(v.y, 0); }
+  if (p.y < floor) { p.y = floor; v.y = 0; c.supported = true; }
 }
 
 function collide(a, b) {
@@ -335,124 +297,33 @@ function stepPhysics(dt) {
   for (const c of cubes) if (c.supported && c !== held) { c.velocity.x -= c.velocity.x * f; c.velocity.z -= c.velocity.z * f; }
 }
 
-/* ---------- Boucle de rendu ---------- */
-let lastFrame = performance.now();
-function frame(now) {
-  requestAnimationFrame(frame);
-  const dt = Math.min((now - lastFrame) / 1000, 1 / 30) || 1 / 60;
-  lastFrame = now;
-  applyCameraPose(now);
-
-  if (!started) $('hint').textContent = '';
-  else if (!markerSeen) $('hint').textContent = 'Filme le marqueur avec la caméra arrière pour faire apparaître les cubes.';
-  else if (now - lastSeen > 400) $('hint').textContent = 'Marqueur hors champ : les cubes restent en place, ramène-le dans l\'image pour recaler.';
-  else $('hint').textContent = held ? 'Cube attrapé : bouge la main, relâche ou lance !' : 'Pince pouce + index sur un cube pour l\'attraper (ou glisse-le au doigt).';
-
-  if (spawned) {
-    stepPhysics(dt);
-    const q = Math.PI / 2, snap = 1 - Math.exp(-8 * dt);
-    for (const c of cubes) {
-      const m = c.mesh;
-      if (c === held) { c.spin.set(0, 0, 0); m.rotation.y += 0.03; m.rotation.x += 0.012; }
-      else if (c.supported) {
-        for (const a of ['x', 'y', 'z']) m.rotation[a] += (Math.round(m.rotation[a] / q) * q - m.rotation[a]) * snap;
-        c.spin.multiplyScalar(Math.exp(-6 * dt));
-      } else {
-        m.rotation.x += c.spin.x * dt; m.rotation.y += c.spin.y * dt; m.rotation.z += c.spin.z * dt;
-      }
-      const h = Math.max(0, m.position.y - RADIUS), k = Math.min(h / 1.2, 0.8);
-      c.shadow.rotation.z = m.rotation.y;
-      c.shadow.position.set(m.position.x, 0.002, m.position.z);
-      c.shadow.scale.setScalar(RADIUS * (1.1 - k * 0.6));
-      c.shadow.material.opacity = 0.5 * (1 - k);
-      m.material.color.setHex(c === held ? COLOR_GRAB : c === hovering ? COLOR_HOVER : c.color);
-      m.scale.setScalar(c === held ? 1.1 : 1);
+function animateCubes(dt) {
+  const q = Math.PI / 2, snap = 1 - Math.exp(-8 * dt);
+  const floor = surface.center.y + RADIUS;
+  for (const c of cubes) {
+    const m = c.mesh;
+    if (c === held) { c.spin.set(0, 0, 0); m.rotation.y += 0.03; m.rotation.x += 0.012; }
+    else if (c.supported) {
+      for (const a of ['x', 'y', 'z']) m.rotation[a] += (Math.round(m.rotation[a] / q) * q - m.rotation[a]) * snap;
+      c.spin.multiplyScalar(Math.exp(-6 * dt));
+    } else {
+      m.rotation.x += c.spin.x * dt; m.rotation.y += c.spin.y * dt; m.rotation.z += c.spin.z * dt;
     }
+    const h = Math.max(0, m.position.y - floor), k = Math.min(h / 0.6, 0.8);
+    c.shadow.rotation.z = m.rotation.y;
+    c.shadow.position.set(m.position.x, surface.center.y + 0.002, m.position.z);
+    c.shadow.scale.setScalar(RADIUS * (1.1 - k * 0.6));
+    c.shadow.material.opacity = 0.5 * (1 - k);
+    m.material.color.setHex(c === held ? COLOR_GRAB : c === hovering ? COLOR_HOVER : c.color);
+    m.scale.setScalar(c === held ? 1.1 : 1);
   }
-  renderer.render(scene, camera);
 }
-requestAnimationFrame(frame);
 
-/* ---------- Démarrage : capteurs, caméra arrière ---------- */
-const octx = $('overlay').getContext('2d');
+/* ---------- Détection de la main sur l'image de la caméra ---------- */
 let landmarker = null;
-
 const withTimeout = (p, ms, label) => Promise.race([
   p, new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' : délai dépassé')), ms))
 ]);
-
-$('go').addEventListener('click', async () => {
-  $('err').textContent = '';
-  // iOS exige une permission explicite, dans le geste de l'utilisateur
-  try {
-    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      const r = await DeviceOrientationEvent.requestPermission();
-      if (r !== 'granted') throw new Error('Capteurs de mouvement refusés');
-    }
-  } catch (e) {
-    $('err').textContent = 'Accès aux capteurs impossible : ' + e.message + '. Sur iPhone : Réglages > Safari > Mouvement et orientation.';
-    return;
-  }
-  addEventListener('ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation', onOrient);
-
-  try {
-    const ask = facingMode => withTimeout(navigator.mediaDevices.getUserMedia({
-      video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false
-    }), 20000, 'Caméra');
-    // caméra arrière imposée sur smartphone ; repli sur la caméra disponible (ordinateur de test)
-    let stream;
-    try { stream = await ask({ exact: 'environment' }); }
-    catch { stream = await ask({ ideal: 'environment' }); }
-    video.srcObject = stream;
-    await video.play();
-  } catch (e) {
-    $('err').textContent = 'Caméra indisponible : ' + e.message + '. La page doit être ouverte en HTTPS.';
-    return;
-  }
-  syncCamera();
-  $('start').style.display = 'none';
-  started = true;
-  trackMarker();
-  loadHands();
-});
-
-/* ---------- Détection du marqueur ---------- */
-const detector = new AR.Detector({ dictionaryName: 'ARUCO', maxHammingDistance: 2 });
-const detCanvas = document.createElement('canvas');
-const detCtx = detCanvas.getContext('2d', { willReadFrequently: true });
-const DET_WIDTH = 480;
-let lastDetect = 0;
-
-function setMarkerState(on, text) { $('markerDot').className = 'dot' + (on ? ' on' : ''); $('markerText').textContent = text; }
-
-function trackMarker() {
-  requestAnimationFrame(trackMarker);
-  const now = performance.now();
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (video.readyState < 2 || !vw || now - lastDetect < 50) return;   // 20 détections par seconde au maximum
-  lastDetect = now;
-
-  detCanvas.width = DET_WIDTH; detCanvas.height = Math.round(DET_WIDTH * vh / vw);
-  detCtx.drawImage(video, 0, 0, detCanvas.width, detCanvas.height);
-  const marker = detector.detect(detCtx.getImageData(0, 0, detCanvas.width, detCanvas.height)).find(m => m.id === MARKER_ID);
-
-  if (!marker) { setMarkerState(false, markerSeen ? 'Marqueur : hors champ' : 'Marqueur : recherche…'); return; }
-
-  const k = vw / detCanvas.width;
-  const pose = cameraPoseFromMarker(marker.corners.map(c => ({ x: c.x * k, y: c.y * k })), focal, vw / 2, vh / 2);
-  if (!pose) return;
-
-  if (!markerSeen) { camPos.copy(pose.position); camQuat.copy(pose.quaternion); }
-  else { camPos.lerp(pose.position, 0.5); camQuat.slerp(pose.quaternion, 0.5); }   // lissage anti-tremblement
-  markerSeen = true;
-  lastSeen = now;
-  gyroAtFix.copy(targetQ);
-  camQAtFix.copy(camQuat);
-  setMarkerState(true, 'Marqueur : détecté ✓');
-  if (!spawned) spawnCubes();
-}
-
-/* ---------- Détection de la main ---------- */
 async function loadHands() {
   $('model').textContent = 'Mains : chargement…';
   try {
@@ -467,62 +338,227 @@ async function loadHands() {
     catch { landmarker = await withTimeout(make('CPU'), 40000, 'Modèle (CPU)'); }
     $('model').textContent = 'Mains : prêt ✓';
   } catch (e) {
-    $('model').textContent = 'Mains : indisponible (' + e.message + '). Glisse les cubes au doigt.';
+    $('model').textContent = 'Mains : indisponible (' + e.message + ')';
   }
 }
+if (supported) loadHands();
 
-/* caméra arrière : pas de miroir ; mapping vidéo -> écran avec object-fit: cover */
-function toScreen(lm) {
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const s = Math.max(innerWidth / vw, innerHeight / vh);
-  const ox = (vw * s - innerWidth) / 2, oy = (vh * s - innerHeight) / 2;
-  return { x: lm.x * vw * s - ox, y: lm.y * vh * s - oy };
+// L'image de la caméra peut arriver retournée ou tournée selon l'appareil : 8 orientations possibles,
+// le bouton « Image main » passe à la suivante jusqu'à ce que le squelette colle à ta vraie main.
+let orient = 0;
+try { orient = Number(localStorage.getItem('handOrient')) || 0; } catch {}
+const orientLabel = () => { $('orient').textContent = 'Image main ' + (orient + 1) + '/8'; };
+orientLabel();
+$('orient').addEventListener('click', () => {
+  orient = (orient + 1) % 8;
+  try { localStorage.setItem('handOrient', orient); } catch {}
+  orientLabel();
+});
+
+let readFB = null, readBuf = null;
+const handCanvas = document.createElement('canvas');
+const handCtx = handCanvas.getContext('2d');
+
+// lit les pixels de l'image caméra (texture WebGL fournie par le navigateur)
+function readCameraPixels(glBinding, xrCamera) {
+  const gl = renderer.getContext();
+  const tex = glBinding.getCameraImage(xrCamera);
+  if (!tex) return null;
+  const w = xrCamera.width, h = xrCamera.height;
+  const prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+  if (!readFB) readFB = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, readFB);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  let ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  if (ok) {
+    if (!readBuf || readBuf.length !== w * h * 4) readBuf = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, readBuf);
+  }
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, prev);
+  return ok ? { data: readBuf, w, h } : null;
 }
+
+// réduit l'image et applique l'orientation choisie ; renvoie un canvas droit, à l'endroit
+function buildHandImage({ data, w, h }) {
+  const rot = orient % 4, flipRows = orient < 4;       // orient 0 : tampon de bas en haut, sans rotation
+  const sw = HAND_WIDTH, sh = Math.round(HAND_WIDTH * ((rot % 2) ? w / h : h / w));
+  if (handCanvas.width !== sw || handCanvas.height !== sh) { handCanvas.width = sw; handCanvas.height = sh; }
+  const img = handCtx.createImageData(sw, sh), out = img.data;
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const u = (x + 0.5) / sw, v = (y + 0.5) / sh;
+      let su, sv;
+      if (rot === 0) { su = u; sv = v; }
+      else if (rot === 1) { su = v; sv = 1 - u; }
+      else if (rot === 2) { su = 1 - u; sv = 1 - v; }
+      else { su = 1 - v; sv = u; }
+      const col = Math.min(w - 1, Math.floor(su * w));
+      const row = flipRows ? h - 1 - Math.min(h - 1, Math.floor(sv * h)) : Math.min(h - 1, Math.floor(sv * h));
+      const i = (row * w + col) * 4, o = (y * sw + x) * 4;
+      out[o] = data[i]; out[o + 1] = data[i + 1]; out[o + 2] = data[i + 2]; out[o + 3] = 255;
+    }
+  }
+  handCtx.putImageData(img, 0, 0);
+  return handCanvas;
+}
+
+const octx = $('overlay').getContext('2d');
 const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 const setState = (cls, text) => { $('dot').className = 'dot ' + cls; $('stateText').textContent = text; };
-let cx = 0, cy = 0, lastT = -1, smSize = 0;
+let cx = 0.5, cy = 0.5, smSize = 0, handActive = false;
+const dirTmp = new THREE.Vector3();
 
-function detect() {
-  requestAnimationFrame(detect);
-  if (!landmarker || video.readyState < 2 || video.currentTime === lastT) return;
-  lastT = video.currentTime;
-  const res = landmarker.detectForVideo(video, performance.now());
+function trackHand(glBinding, xrCamera) {
+  const px = readCameraPixels(glBinding, xrCamera);
+  if (!px) { $('model').textContent = 'Mains : image caméra illisible'; return; }
+  const res = landmarker.detectForVideo(buildHandImage(px), performance.now());
   octx.clearRect(0, 0, innerWidth, innerHeight);
 
   if (!res.landmarks.length) {
     handActive = false; smSize = 0;
-    if (held && !touching) endGrab();
-    if (!touching) hovering = null;
+    if (held && !touchSource) endGrab();
+    if (!touchSource) hovering = null;
     setState('', 'Aucune main');
     return;
   }
   handActive = true;
-  const raw = res.landmarks[0], lm = raw.map(toScreen);
+  const raw = res.landmarks[0];
+  const W = innerWidth, H = innerHeight;
 
   octx.strokeStyle = 'rgba(255,255,255,.85)'; octx.lineWidth = 3;
-  for (const [a, b] of BONES) { octx.beginPath(); octx.moveTo(lm[a].x, lm[a].y); octx.lineTo(lm[b].x, lm[b].y); octx.stroke(); }
+  for (const [a, b] of BONES) { octx.beginPath(); octx.moveTo(raw[a].x * W, raw[a].y * H); octx.lineTo(raw[b].x * W, raw[b].y * H); octx.stroke(); }
   octx.fillStyle = '#38bdf8';
-  for (const p of lm) { octx.beginPath(); octx.arc(p.x, p.y, 4, 0, 7); octx.fill(); }
+  for (const p of raw) { octx.beginPath(); octx.arc(p.x * W, p.y * H, 4, 0, 7); octx.fill(); }
 
-  const rawSize = Math.hypot(raw[0].x - raw[9].x, raw[0].y - raw[9].y);
+  const aspect = px.w / px.h;
+  const rawSize = Math.hypot(raw[0].x - raw[9].x, (raw[0].y - raw[9].y) / aspect);
   smSize = smSize ? smSize + (rawSize - smSize) * 0.5 : rawSize;
-  const pinchDist = Math.hypot(raw[4].x - raw[8].x, raw[4].y - raw[8].y) / smSize;
-  cx += ((lm[4].x + lm[8].x) / 2 - cx) * 0.5; cy += ((lm[4].y + lm[8].y) / 2 - cy) * 0.5;
+  const pinchDist = Math.hypot(raw[4].x - raw[8].x, (raw[4].y - raw[8].y) / aspect) / smSize;
+  cx += ((raw[4].x + raw[8].x) / 2 - cx) * 0.5; cy += ((raw[4].y + raw[8].y) / 2 - cy) * 0.5;
 
-  const pinching = held && !touching ? pinchDist < 0.45 : pinchDist < 0.3;   // hystérésis
-  hovering = held && !touching ? held : pickCube(cx, cy);
+  const pinching = held && !touchSource ? pinchDist < 0.45 : pinchDist < 0.3;   // hystérésis
+  const nx = cx * 2 - 1, ny = 1 - cy * 2;
+  hovering = held && !touchSource ? held : pickCube(nx, ny);
 
-  octx.beginPath(); octx.arc(cx, cy, pinching ? 12 : 18, 0, 7);
+  octx.beginPath(); octx.arc(cx * W, cy * H, pinching ? 12 : 18, 0, 7);
   octx.strokeStyle = pinching ? '#fbbf24' : '#fff'; octx.lineWidth = 3; octx.stroke();
 
-  if (spawned) {
-    if (pinching && !held && hovering) startGrab(hovering, cx, cy, smSize);
-    if (!pinching && held && !touching) endGrab();
-    if (held && !touching) moveGrab(cx, cy, smSize);
+  if (surface.placed && !touchSource) {
+    ndc.set(nx, ny);
+    raycaster.setFromCamera(ndc, handCam);
+    dirTmp.copy(raycaster.ray.direction);
+    if (pinching && !held && hovering) startGrab(hovering, handCam.position, dirTmp, smSize);
+    if (!pinching && held) endGrab();
+    if (held) moveGrab(handCam.position, dirTmp, smSize);
   }
   setState(held ? 'pinch' : 'on', held ? 'Cube attrapé' : pinching ? 'Pincement (hors cube)' : 'Main détectée');
 }
-detect();
+
+/* ---------- Session WebXR ---------- */
+let session = null, refSpace = null, hitSource = null, glBinding = null;
+let lastHand = 0, lastFrame = performance.now(), hasCameraAccess = false;
+const q = new THREE.Quaternion(), rayDir = new THREE.Vector3(), rayOrigin = new THREE.Vector3();
+
+function rayFromPose(pose) {
+  const t = pose.transform;
+  rayOrigin.set(t.position.x, t.position.y, t.position.z);
+  q.set(t.orientation.x, t.orientation.y, t.orientation.z, t.orientation.w);
+  rayDir.set(0, 0, -1).applyQuaternion(q);
+}
+
+function onXRFrame(time, frame) {
+  if (!frame) return;
+  const now = performance.now();
+  const dt = Math.min((now - lastFrame) / 1000, 1 / 30) || 1 / 60;
+  lastFrame = now;
+  refSpace = renderer.xr.getReferenceSpace();
+
+  const pose = frame.getViewerPose(refSpace);
+  if (pose && pose.views.length) {
+    const view = pose.views[0];
+    updateHandCam(view);
+    hasCameraAccess = !!view.camera && !!glBinding;
+    if (landmarker && hasCameraAccess && now - lastHand > HAND_INTERVAL) { lastHand = now; trackHand(glBinding, view.camera); }
+  }
+
+  // réticule : où le regard de la caméra rencontre une surface horizontale
+  if (!surface.placed && hitSource) {
+    const results = frame.getHitTestResults(hitSource);
+    const hit = results.length && results[0].getPose(refSpace);
+    if (hit && hit.transform.matrix[5] > 0.8) {            // la normale pointe vers le haut : table ou sol
+      reticle.matrix.fromArray(hit.transform.matrix);
+      surface.center.setFromMatrixPosition(reticle.matrix);
+      surfaceGroup.position.copy(surface.center);
+      reticle.visible = surfaceGroup.visible = true;
+    } else {
+      reticle.visible = surfaceGroup.visible = false;
+    }
+  }
+
+  // cube tenu au doigt
+  if (touchSource && held) {
+    const p = frame.getPose(touchSource.targetRaySpace, refSpace);
+    if (p) { rayFromPose(p); moveGrab(rayOrigin, rayDir, 0); }
+  }
+
+  if (surface.placed) { stepPhysics(dt); animateCubes(dt); }
+
+  if (!hasCameraAccess) $('model').textContent = 'Mains : caméra non accessible, déplace les cubes au doigt';
+  $('hint').textContent = !surface.placed
+    ? (reticle.visible ? "Touche l'écran pour poser les cubes ici." : 'Bouge lentement le téléphone pour détecter une table ou le sol.')
+    : (held ? 'Cube attrapé : bouge, relâche ou lance !' : 'Pince pouce + index sur un cube pour l\'attraper (ou touche-le du doigt).');
+  renderer.render(scene, camera);
+}
+
+async function startAR() {
+  $('xrRoot').style.display = 'block';          // le conteneur doit être affiché quand la session démarre
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['dom-overlay', 'camera-access'],
+      domOverlay: { root: $('xrRoot') },
+    });
+  } catch (e) {
+    $('xrRoot').style.display = 'none';
+    $('note').textContent = 'Impossible de démarrer la session AR : ' + e.message;
+    return;
+  }
+  $('start').style.display = 'none';
+  $('overlay').width = innerWidth; $('overlay').height = innerHeight;
+
+  await renderer.xr.setSession(session);
+  const viewerSpace = await session.requestReferenceSpace('viewer');
+  hitSource = await session.requestHitTestSource({ space: viewerSpace });
+  glBinding = ('XRWebGLBinding' in window) ? new XRWebGLBinding(session, renderer.getContext()) : null;
+
+  session.addEventListener('select', () => { if (!surface.placed && reticle.visible) placeCubes(); });
+  session.addEventListener('selectstart', e => {
+    if (!surface.placed || held || e.inputSource.targetRayMode !== 'screen') return;
+    const p = e.frame.getPose(e.inputSource.targetRaySpace, refSpace);
+    if (!p) return;
+    rayFromPose(p);
+    raycaster.set(rayOrigin, rayDir);
+    const hit = raycaster.intersectObjects(cubes.map(c => c.mesh), false)[0];
+    if (hit) { touchSource = e.inputSource; startGrab(cubes.find(c => c.mesh === hit.object), rayOrigin, rayDir, 0); }
+  });
+  session.addEventListener('selectend', e => { if (e.inputSource === touchSource) { touchSource = null; endGrab(); } });
+  session.addEventListener('end', () => {
+    renderer.setAnimationLoop(null);
+    session = null; hitSource = null; glBinding = null; touchSource = null;
+    unplace();
+    reticle.visible = false;
+    $('xrRoot').style.display = 'none';
+    $('start').style.display = 'flex';
+  });
+  renderer.setAnimationLoop(onXRFrame);
+}
+
+$('go').addEventListener('click', startAR);
+$('quit').addEventListener('click', () => session && session.end());
+$('replace').addEventListener('click', unplace);
+// les boutons ne doivent pas déclencher la pose des cubes
+for (const id of ['replace', 'orient', 'quit']) $(id).addEventListener('beforexrselect', e => e.preventDefault());
 </script>
 </body>
 </html>
