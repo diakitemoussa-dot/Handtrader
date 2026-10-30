@@ -48,7 +48,9 @@
     <div class="card" id="hint"></div>
     <div id="buttons">
       <button id="replace" class="secondary" style="display:none">Replacer</button>
-      <button id="orient" class="secondary">Image main</button>
+      <button id="flipV" class="secondary" title="Inverser haut/bas">↕</button>
+      <button id="flipH" class="secondary" title="Inverser gauche/droite">↔</button>
+      <button id="rotate" class="secondary" title="Tourner de 90°">⟳</button>
       <button id="quit" class="secondary">Quitter</button>
     </div>
   </div>
@@ -343,17 +345,17 @@ async function loadHands() {
 }
 if (supported) loadHands();
 
-// L'image de la caméra peut arriver retournée ou tournée selon l'appareil : 8 orientations possibles,
-// le bouton « Image main » passe à la suivante jusqu'à ce que le squelette colle à ta vraie main.
-let orient = 0;
-try { orient = Number(localStorage.getItem('handOrient')) || 0; } catch {}
-const orientLabel = () => { $('orient').textContent = 'Image main ' + (orient + 1) + '/8'; };
-orientLabel();
-$('orient').addEventListener('click', () => {
-  orient = (orient + 1) % 8;
-  try { localStorage.setItem('handOrient', orient); } catch {}
-  orientLabel();
-});
+// L'image de la caméra peut arriver retournée ou tournée selon l'appareil. Par défaut elle est lue de haut en bas,
+// sans miroir ni rotation ; les boutons ↕ ↔ ⟳ corrigent si le squelette ne colle pas à ta vraie main.
+const handView = { rot: 0, flipV: false, flipH: false };
+try { Object.assign(handView, JSON.parse(localStorage.getItem('handView2') || '{}')); } catch {}
+function changeView(fn) {
+  fn(handView);
+  try { localStorage.setItem('handView2', JSON.stringify(handView)); } catch {}
+}
+$('flipV').addEventListener('click', () => changeView(v => { v.flipV = !v.flipV; }));
+$('flipH').addEventListener('click', () => changeView(v => { v.flipH = !v.flipH; }));
+$('rotate').addEventListener('click', () => changeView(v => { v.rot = (v.rot + 1) % 4; }));
 
 let readFB = null, readBuf = null;
 const handCanvas = document.createElement('canvas');
@@ -381,20 +383,21 @@ function readCameraPixels(glBinding, xrCamera) {
 
 // réduit l'image et applique l'orientation choisie ; renvoie un canvas droit, à l'endroit
 function buildHandImage({ data, w, h }) {
-  const rot = orient % 4, flipRows = orient < 4;       // orient 0 : tampon de bas en haut, sans rotation
+  const { rot, flipV, flipH } = handView;
   const sw = HAND_WIDTH, sh = Math.round(HAND_WIDTH * ((rot % 2) ? w / h : h / w));
   if (handCanvas.width !== sw || handCanvas.height !== sh) { handCanvas.width = sw; handCanvas.height = sh; }
   const img = handCtx.createImageData(sw, sh), out = img.data;
   for (let y = 0; y < sh; y++) {
     for (let x = 0; x < sw; x++) {
-      const u = (x + 0.5) / sw, v = (y + 0.5) / sh;
+      const u = flipH ? 1 - (x + 0.5) / sw : (x + 0.5) / sw, v = (y + 0.5) / sh;
       let su, sv;
       if (rot === 0) { su = u; sv = v; }
       else if (rot === 1) { su = v; sv = 1 - u; }
       else if (rot === 2) { su = 1 - u; sv = 1 - v; }
       else { su = 1 - v; sv = u; }
       const col = Math.min(w - 1, Math.floor(su * w));
-      const row = flipRows ? h - 1 - Math.min(h - 1, Math.floor(sv * h)) : Math.min(h - 1, Math.floor(sv * h));
+      const r = Math.min(h - 1, Math.floor(sv * h));
+      const row = flipV ? h - 1 - r : r;
       const i = (row * w + col) * 4, o = (y * sw + x) * 4;
       out[o] = data[i]; out[o + 1] = data[i + 1]; out[o + 2] = data[i + 2]; out[o + 3] = 255;
     }
@@ -558,7 +561,7 @@ $('go').addEventListener('click', startAR);
 $('quit').addEventListener('click', () => session && session.end());
 $('replace').addEventListener('click', unplace);
 // les boutons ne doivent pas déclencher la pose des cubes
-for (const id of ['replace', 'orient', 'quit']) $(id).addEventListener('beforexrselect', e => e.preventDefault());
+for (const id of ['replace', 'flipV', 'flipH', 'rotate', 'quit']) $(id).addEventListener('beforexrselect', e => e.preventDefault());
 </script>
 </body>
 </html>
